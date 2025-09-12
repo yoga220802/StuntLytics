@@ -3,3 +3,5 @@ pandas
 numpy
 pydeck
 matplotlib>=3.8
+joblib
+scikit-learn
