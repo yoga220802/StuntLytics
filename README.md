@@ -68,7 +68,7 @@ Ikuti langkah-langkah berikut untuk menjalankan aplikasi di komputer Anda.
 Buka terminal atau command prompt Anda dan jalankan perintah berikut:
 
 ```bash
-git clone [[https://github.com/yoga220802/StuntLytics.git](https://github.com/yoga220802/StuntLytics.git)
+git clone https://github.com/yoga220802/StuntLytics.git
 cd StuntLytics
 ````
 
