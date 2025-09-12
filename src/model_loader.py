@@ -45,16 +45,20 @@ def predict_local(model, input_data: Dict[str, Any]) -> Dict[str, Any]:
 
         st.warning("Simulasi prediksi tanpa standard scaling. Akurasi mungkin berbeda dari notebook.", icon="🔬")
 
-        # 3. Pastikan urutan kolom sama persis dengan saat training
+        # 3. Pastikan urutan kolom sama persis dengan saat training (19 FITUR)
         final_features_order = [
             'jenis_kelamin_anak', 'jenis_pekerjaan_orang_tua', 'pendidikan_ibu',
-            'status_pernikahan', 'jumlah_anak', 'akses_air_bersih',
-            'status_imunisasi_anak', 'berat_lahir_gram', 'asi_eksklusif',
-            'usia_anak_bulan', 'tinggi_badan_ibu_cm', 'lila_saat_hamil_cm',
-            'bmi_pra_hamil', 'hb_g_dl', 'kenaikan_bb_hamil_kg',
-            'usia_ibu_saat_hamil_tahun', 'jarak_kehamilan_sebelumnya_bulan',
-            'hipertensi_ibu', 'diabetes_ibu', 'kunjungan_anc_x', 'kepatuhan_ttd',
-            'paparan_asap_rokok', 'kepesertaan_program_bantuan'
+            # 'status_pernikahan',
+            'jumlah_anak', 'akses_air_bersih', 'status_imunisasi_anak',
+            'berat_lahir_gram', 'asi_eksklusif', 'usia_anak_bulan',
+            'tinggi_badan_ibu_cm', 'lila_saat_hamil_cm', 'bmi_pra_hamil',
+            'hb_g_dl', 'kenaikan_bb_hamil_kg', 'usia_ibu_saat_hamil_tahun',
+            'jarak_kehamilan_sebelumnya_bulan',
+            # 'hipertensi_ibu',
+            # 'diabetes_ibu',
+            'kunjungan_anc_x', 'kepatuhan_ttd',
+            # 'paparan_asap_rokok',
+            'kepesertaan_program_bantuan'
         ]
         df_processed = df_input.reindex(columns=final_features_order)
 
