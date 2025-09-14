@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px
 
 from src import data_loader, styles, config
 from src.components import sidebar
@@ -24,10 +25,65 @@ def render_page():
         st.line_chart(tt.set_index("bulan"))
 
     with c2:
-        st.markdown("**Korelasi Sederhana terhadap Skor Risiko**")
-        num_cols = ["bblr","asi_eksklusif","imunisasi_lengkap","akses_air_layak","jamban_sehat","usia_anak_bulan","tanggungan","risk_score"]
-        corr = df_filtered[num_cols].corr(numeric_only=True)
-        st.dataframe(corr.style.background_gradient(cmap='coolwarm', axis=None))
+        st.markdown("**Faktor Paling Berpengaruh (Kekuatan Korelasi)**")
+
+        num_cols = [
+            "bblr",
+            "asi_eksklusif",
+            "imunisasi_lengkap",
+            "akses_air_layak",
+            "jamban_sehat",
+            "usia_anak_bulan",
+            "tanggungan",
+            "risk_score",
+        ]
+        valid_cols = [col for col in num_cols if col in df_filtered.columns]
+
+        if len(valid_cols) > 1:
+            corr = df_filtered[valid_cols].corr(numeric_only=True)
+
+            corr_risk = corr["risk_score"].drop("risk_score")
+
+            top_features = corr_risk.abs().nlargest(6)
+            top_corr_values = corr_risk.loc[top_features.index]
+
+            # Siapkan data untuk radar chart
+            df_radar = pd.DataFrame(
+                {
+                    "Faktor": top_corr_values.index,
+                    "Korelasi Asli": top_corr_values.values,
+                    "Kekuatan Korelasi": top_corr_values.abs().values,  # BARU: Pakai nilai absolut untuk radius plot
+                }
+            )
+
+            # Buat Radar Chart dengan range 0-1
+            fig = px.line_polar(
+                df_radar,
+                r="Kekuatan Korelasi",  # Gunakan kolom nilai absolut
+                theta="Faktor",
+                line_close=True,
+                template="plotly_dark",
+                title="Kekuatan Pengaruh Faktor terhadap Risiko",
+                range_r=[0, 1],  # BARU: Paksa skala chart dari 0 sampai 1
+            )
+
+            # Styling dan custom hover data
+            fig.update_traces(
+                fill="toself",
+                fillcolor="rgba(239, 68, 68, 0.3)",
+                line=dict(color="rgba(239, 68, 68, 0.8)"),
+                # BARU: Custom hover template untuk menampilkan nilai asli
+                hovertemplate="<b>%{theta}</b><br>Kekuatan: %{r:.2f}<br>Korelasi Asli: %{customdata[0]:.2f}<extra></extra>",
+                customdata=df_radar[["Korelasi Asli"]],
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+            st.caption(
+                "Menunjukkan **kekuatan** pengaruh (nilai absolut korelasi) dari 0 (pusat) hingga 1 (tepi). Arahkan kursor untuk melihat nilai korelasi asli (positif/negatif)."
+            )
+
+        else:
+            st.warning("Data tidak cukup untuk menampilkan grafik korelasi.")
 
     st.markdown("### Insight Otomatis (Rule-based)")
     msgs = []
