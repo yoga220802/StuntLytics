@@ -24,8 +24,6 @@ def load_data(csv_path: str = "data/data_keluarga.csv") -> pd.DataFrame:
             "kecamatan": np.random.choice(kecamatan, n),
             "desa": [f"Desa-{i%50:02d}" for i in range(n)],
             "tanggal": pd.to_datetime(np.random.choice(pd.date_range("2024-01-01","2025-08-01"), n)),
-            "lat": -6.9 + (np.random.rand(n) - 0.5) * 2.0,
-            "lon": 107.6 + (np.random.rand(n) - 0.5) * 2.0,
             "usia_anak_bulan": np.random.randint(0, 60, n),
             "jenis_kelamin": np.random.choice(["L","P"], n),
             "bblr": np.random.choice([0,1], n, p=[0.85,0.15]),
