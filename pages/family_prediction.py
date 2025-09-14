@@ -67,6 +67,18 @@ def get_llm_recommendation(user_data, prediction_proba, prediction_result):
         return "Gagal memproses respons dari AI. Format respons tidak sesuai."
 
 
+# Fungsi untuk mengirim data ke database
+def upload_to_database(data):
+    url = "https://your-database-url/stunting-data"
+    headers = {"Content-Type": "application/json"}
+    try:
+        response = requests.put(url, headers=headers, data=json.dumps(data))
+        response.raise_for_status()
+        return "Data berhasil diunggah ke database."
+    except requests.exceptions.RequestException as e:
+        return f"Gagal mengunggah data: {e}"
+
+
 # Judul halaman
 st.set_page_config(page_title="Prediksi Risiko Keluarga", layout="wide")
 st.title("Prediksi Risiko Keluarga – Scoring & Rekomendasi")
@@ -149,10 +161,22 @@ with st.form(key="prediction_form"):
             "Program Bantuan Diterima", ["Tidak Ada", "BPNT", "PKH", "Lainnya"]
         )
 
-    submit_button = st.form_submit_button(label="🔬 Prediksi Risiko")
+    # Tombol untuk submit prediksi dan upload data baru
+    col1, col2 = st.columns(2)
+    with col1:
+        submit_button = st.form_submit_button(label="🔬 Prediksi Risiko")
+    with col2:
+        upload_button = st.form_submit_button(label="📤 Upload Data Baru")
 
+# Initialize prediction_proba in session state if not already set
+if "prediction_proba" not in st.session_state:
+    st.session_state["prediction_proba"] = 0.0
 
-# Jika tombol ditekan
+# Initialize session state for upload form visibility
+if "show_upload_form" not in st.session_state:
+    st.session_state["show_upload_form"] = False
+
+# Jika tombol prediksi ditekan
 if submit_button:
     # Kumpulkan semua data input, termasuk yang kategorikal untuk LLM
     input_data_for_llm = {
@@ -221,6 +245,9 @@ if submit_button:
     prediction_proba = model.predict_proba(input_df)[0][1] * 100
     prediction = "Stunting" if prediction_proba > 50 else "Tidak Stunting"
 
+    # Simpan prediction_proba ke session state
+    st.session_state["prediction_proba"] = prediction_proba
+
     # Tampilkan hasil
     st.subheader("Hasil Prediksi Model")
     st.info(
@@ -240,3 +267,107 @@ if submit_button:
                 input_data_for_llm, prediction_proba, prediction
             )
             st.markdown(recommendation)
+
+# Data UMP berdasarkan wilayah
+UMP = {
+    "Kabupaten Bandung": 3_700_000,
+    "Kabupaten Bandung Barat": 3_600_000,
+    "Kabupaten Bekasi": 5_200_000,
+    "Kabupaten Bogor": 4_500_000,
+    "Kabupaten Ciamis": 2_100_000,
+    "Kabupaten Cianjur": 2_700_000,
+    "Kabupaten Cirebon": 2_500_000,
+    "Kabupaten Garut": 2_200_000,
+    "Kabupaten Indramayu": 2_700_000,
+    "Kabupaten Karawang": 5_300_000,
+    "Kabupaten Kuningan": 2_300_000,
+    "Kabupaten Majalengka": 2_400_000,
+    "Kabupaten Pangandaran": 2_200_000,
+    "Kabupaten Purwakarta": 4_800_000,
+    "Kabupaten Subang": 3_000_000,
+    "Kabupaten Sukabumi": 3_000_000,
+    "Kabupaten Sumedang": 3_200_000,
+    "Kabupaten Tasikmalaya": 2_400_000,
+    "Kota Bandung": 4_000_000,
+    "Kota Banjar": 2_300_000,
+    "Kota Bekasi": 5_200_000,
+    "Kota Bogor": 4_800_000,
+    "Kota Cimahi": 3_800_000,
+    "Kota Cirebon": 3_200_000,
+    "Kota Depok": 4_800_000,
+    "Kota Sukabumi": 3_200_000,
+    "Kota Tasikmalaya": 2_600_000,
+}
+
+# Jika tombol upload data baru ditekan
+if upload_button:
+    st.session_state["show_upload_form"] = True
+
+# Tampilkan form upload hanya jika tombol upload data baru ditekan
+if st.session_state["show_upload_form"]:
+    st.subheader("📤 Form Input Tambahan")
+    with st.expander("Klik untuk membuka form upload data"):
+        wilayah = st.selectbox("Wilayah", options=list(UMP.keys()))
+        kecamatan = st.text_input("Kecamatan")
+        tipe_wilayah = st.selectbox("Tipe Wilayah", ["Urban", "Rural"])
+        nama_kepala_keluarga = st.text_input("Nama Kepala Keluarga")
+        jenis_pekerjaan_ortu = st.selectbox(
+            "Jenis Pekerjaan Orang Tua", ["PNS", "Wiraswasta", "Petani", "Buruh", "Tidak Bekerja"]
+        )
+        upah_keluarga = st.number_input("Upah Keluarga (Rp/bulan)", min_value=0, step=100000)
+        
+        # Auto-fill Rata-rata UMP Wilayah based on selected Wilayah
+        rata_rata_ump = UMP.get(wilayah, 0)
+        st.number_input(
+            "Rata-rata UMP Wilayah (Rp/bulan)", value=rata_rata_ump, step=100000, disabled=True
+        )
+        
+        z_score_tbu = st.number_input("Z-Score TB/U", step=0.01)
+        prob_stunting_simulasi = st.number_input(
+            "Probabilitas Stunting (simulasi)", value=st.session_state["prediction_proba"], step=0.01
+        )
+
+        submit_upload = st.button(label="Unggah Data")
+
+        if submit_upload:
+            # Gabungkan data tambahan dengan data prediksi
+            new_data = {
+                "Wilayah": wilayah,
+                "Kecamatan": kecamatan,
+                "Tipe Wilayah": tipe_wilayah,
+                "Nama Kepala Keluarga": nama_kepala_keluarga,
+                "Jenis Kelamin Anak": "Laki-laki" if jenis_kelamin == "Laki-laki" else "Perempuan",
+                "Jenis Pekerjaan Orang Tua": jenis_pekerjaan_ortu,
+                "Pendidikan Ibu": pendidikan_ibu,
+                "Status Pernikahan": status_pernikahan,
+                "Jumlah Anak": jumlah_anak,
+                "Upah Keluarga (Rp/bulan)": upah_keluarga,
+                "Rata-rata UMP Wilayah (Rp/bulan)": rata_rata_ump,
+                "Akses Air Bersih": akses_air_bersih,
+                "Status Imunisasi Anak": status_imunisasi,
+                "Berat Lahir (gram)": berat_lahir,
+                "ASI Eksklusif": asi_eksklusif,
+                "Usia Anak (bulan)": usia_anak,
+                "Tinggi Badan Ibu (cm)": tinggi_ibu,
+                "LiLA saat Hamil (cm)": lila_saat_hamil,
+                "BMI Pra-Hamil": bmi_pra_hamil,
+                "Hb (g/dL)": kadar_hb,
+                "Kenaikan BB Hamil (kg)": kenaikan_bb_hamil,
+                "Usia Ibu saat Hamil (tahun)": usia_ibu_hamil,
+                "Jarak Kehamilan Sebelumnya (bulan)": jarak_kehamilan,
+                "Hipertensi Ibu": riwayat_hipertensi,
+                "Diabetes Ibu": riwayat_diabetes,
+                "Kunjungan ANC (x)": jumlah_kunjungan_anc,
+                "Kepatuhan TTD": kepatuhan_ttd,
+                "Paparan Asap Rokok": paparan_asap_rokok,
+                "Kepesertaan Program Bantuan": program_bantuan,
+                "Prob_raw": st.session_state["prediction_proba"] / 100,
+                "Status Stunting (Biner)": "1" if prediction == "Stunting" else "0",
+                "Kategori Stunting (3L)": prediction,
+                "Z-Score TB/U": z_score_tbu,
+                "Probabilitas Stunting (simulasi)": prob_stunting_simulasi,
+            }
+
+            # Kirim data ke database
+            result = upload_to_database(new_data)
+            st.success(result) if "berhasil" in result else st.error(result)
