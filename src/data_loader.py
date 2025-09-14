@@ -36,6 +36,17 @@ def load_data(csv_path: str = "data/data_keluarga.csv") -> pd.DataFrame:
             "pengeluaran_bulan": np.random.normal(3200000, 1000000, n).clip(500000, 10000000).round(),
             "tanggungan": np.random.randint(1, 7, n),
         })
+        # Add dummy data for total bayi lahir and total bayi stunting
+        df["total_bayi_lahir"] = np.random.randint(1, 10, n)
+        df["total_bayi_stunting"] = np.random.randint(0, df["total_bayi_lahir"] + 1)
+        
+        # Add dummy data for jumlah_nakes (healthcare workers) per year
+        years = pd.date_range("2024-01-01", "2025-12-31", freq="Y").year
+        df["tahun"] = df["tanggal"].dt.year
+        df["jumlah_nakes"] = df["kabupaten"].map(
+            lambda x: np.random.randint(50, 500) if x else 0
+        ) + np.random.choice(range(10, 50), len(df))
+
         score = (
             0.25*df["bblr"] + 0.15*(1-df["asi_eksklusif"]) + 0.12*(1-df["imunisasi_lengkap"]) +
             0.18*(1-df["akses_air_layak"]) + 0.12*(1-df["jamban_sehat"]) +
