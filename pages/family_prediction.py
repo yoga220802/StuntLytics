@@ -1,110 +1,242 @@
 import streamlit as st
-from src import data_loader, styles, utils, model_loader
-from src.components import sidebar
+import pandas as pd
+import joblib
+import requests
+import json
 
-def render_page():
-    # Panggil sidebar untuk UI konsisten & akses konfigurasi API
-    df_all = data_loader.load_data()
-    sidebar.render_sidebar(df_all)
-    
-    st.subheader("Prediksi Risiko Keluarga – Scoring & Rekomendasi")
-    st.caption("Isi form berikut untuk memprediksi risiko stunting berdasarkan model Machine Learning.")
+# Muat model yang telah dilatih
+try:
+    model = joblib.load("models/stunting_model.joblib")
+except FileNotFoundError:
+    st.error(
+        "File model 'stunting_model.joblib' tidak ditemukan. Pastikan file tersebut ada di dalam folder 'models/'."
+    )
+    st.stop()
 
-    with st.form("pred_form_ml"):
-        # --- Bagian 1: Data Anak ---
-        st.markdown("##### 1. Data Anak")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            usia_anak_bulan = st.number_input("Usia Anak (bulan)", 0, 72, 24)
-            berat_lahir_gram = st.number_input("Berat Lahir (gram)", 1000, 5000, 3000)
-            jenis_kelamin_anak = st.selectbox("Jenis Kelamin", ["Laki-laki", "Perempuan"])
-        with c2:
-            asi_eksklusif = st.selectbox("ASI Eksklusif?", ["Ya", "Tidak"])
-            status_imunisasi_anak = st.selectbox("Status Imunisasi", ["Lengkap", "Tidak Lengkap", "Dasar Tidak Lengkap"])
-        with c3:
-             akses_air_bersih = st.selectbox("Akses Air Bersih", ["Layak", "Tidak Layak"])
-             paparan_asap_rokok = st.selectbox("Paparan Asap Rokok", ["Ya", "Tidak"])
 
-        # --- Bagian 2: Data Ibu & Kehamilan ---
-        st.markdown("##### 2. Data Ibu & Kehamilan")
-        c4, c5, c6 = st.columns(3)
-        with c4:
-            tinggi_badan_ibu_cm = st.number_input("Tinggi Badan Ibu (cm)", 130, 200, 155)
-            lila_saat_hamil_cm = st.number_input("LiLA saat Hamil (cm)", 15.0, 40.0, 23.5, 0.1)
-            bmi_pra_hamil = st.number_input("BMI Pra-Hamil", 10.0, 40.0, 21.0, 0.1)
-        with c5:
-            usia_ibu_saat_hamil_tahun = st.number_input("Usia Ibu saat Hamil (tahun)", 15, 50, 28)
-            kenaikan_bb_hamil_kg = st.number_input("Kenaikan BB saat Hamil (kg)", 1, 30, 12)
-            jarak_kehamilan_sebelumnya_bulan = st.number_input("Jarak Kehamilan Sebelumnya (bulan)", 0, 120, 24, help="Isi 0 jika ini kehamilan pertama")
-        with c6:
-            hb_g_dl = st.number_input("Kadar Hb (g/dL)", 5.0, 20.0, 11.5, 0.1)
-            kunjungan_anc_x = st.number_input("Jumlah Kunjungan ANC", 0, 20, 8)
-            kepatuhan_ttd = st.selectbox("Kepatuhan Konsumsi TTD", ["Baik", "Kurang"])
+# Fungsi untuk memanggil API OpenRouter dan mendapatkan rekomendasi
+def get_llm_recommendation(user_data, prediction_proba, prediction_result):
+    # Ganti dengan API Key Anda
+    api_key = (
+        "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"
+    )
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
-        # --- Bagian 3: Kondisi Keluarga & Lainnya ---
-        st.markdown("##### 3. Kondisi Keluarga & Lainnya")
-        c7, c8, c9 = st.columns(3)
-        with c7:
-            pendidikan_ibu = st.selectbox("Pendidikan Terakhir Ibu", ["SD", "SMP", "SMA", "Diploma", "S1"])
-            jenis_pekerjaan_orang_tua = st.selectbox("Pekerjaan Orang Tua", ["PNS", "Wiraswasta", "Buruh", "Petani", "Lainnya"])
-            status_pernikahan = st.selectbox("Status Pernikahan", ["Menikah", "Belum Menikah"])
-        with c8:
-            jumlah_anak = st.number_input("Total Jumlah Anak", 1, 15, 2)
-            hipertensi_ibu = st.selectbox("Riwayat Hipertensi Ibu", ["Tidak", "Ya"])
-            diabetes_ibu = st.selectbox("Riwayat Diabetes Ibu", ["Tidak", "Ya"])
-        with c9:
-             kepesertaan_program_bantuan = st.selectbox("Program Bantuan Diterima", ["Tidak Ada", "PKH", "BPNT"])
-        
-        submitted = st.form_submit_button("Hitung Risiko Stunting")
+    # Membuat prompt yang informatif untuk LLM
+    prompt = f"""
+    Anda adalah seorang ahli gizi dan kesehatan anak. Berikan rekomendasi yang personal, singkat, dan actionable (maksimal 3 poin) untuk keluarga di Indonesia berdasarkan data berikut:
 
-    if submitted:
-        # Siapkan payload untuk model lokal. Nama key harus sama persis dengan yang di `predict_local`
-        payload = {
-            'jenis_kelamin_anak': jenis_kelamin_anak, 'jenis_pekerjaan_orang_tua': jenis_pekerjaan_orang_tua,
-            'pendidikan_ibu': pendidikan_ibu, 'status_pernikahan': status_pernikahan, 'jumlah_anak': jumlah_anak,
-            'akses_air_bersih': akses_air_bersih, 'status_imunisasi_anak': status_imunisasi_anak,
-            'berat_lahir_gram': berat_lahir_gram, 'asi_eksklusif': asi_eksklusif, 'usia_anak_bulan': usia_anak_bulan,
-            'tinggi_badan_ibu_cm': tinggi_badan_ibu_cm, 'lila_saat_hamil_cm': lila_saat_hamil_cm,
-            'bmi_pra_hamil': bmi_pra_hamil, 'hb_g_dl': hb_g_dl, 'kenaikan_bb_hamil_kg': kenaikan_bb_hamil_kg,
-            'usia_ibu_saat_hamil_tahun': usia_ibu_saat_hamil_tahun,
-            'jarak_kehamilan_sebelumnya_bulan': jarak_kehamilan_sebelumnya_bulan, 'hipertensi_ibu': hipertensi_ibu,
-            'diabetes_ibu': diabetes_ibu, 'kunjungan_anc_x': kunjungan_anc_x, 'kepatuhan_ttd': kepatuhan_ttd,
-            'paparan_asap_rokok': paparan_asap_rokok, 'kepesertaan_program_bantuan': kepesertaan_program_bantuan
-        }
-        
-        # Panggil model lokal (karena API tidak disiapkan untuk fitur ini)
-        model = model_loader.load_model()
-        if model:
-            with st.spinner("Melakukan prediksi lokal..."):
-                prediction_result = model_loader.predict_local(model, payload)
+    Data Anak dan Keluarga:
+    - Usia Anak: {user_data["Usia Anak (bulan)"]} bulan
+    - Berat Lahir: {user_data["Berat Lahir (gram)"]} gram
+    - Jenis Kelamin: {"Laki-laki" if user_data["Jenis Kelamin"] == 1 else "Perempuan"}
+    - ASI Eksklusif: {"Ya" if user_data["ASI Eksklusif"] == 1 else "Tidak"}
+    - Status Imunisasi: {"Lengkap" if user_data["Status Imunisasi"] == 1 else "Tidak Lengkap"}
+    - Akses Air Bersih: {"Layak" if user_data["Akses Air Bersih"] == 1 else "Tidak Layak"}
+    - Paparan Asap Rokok: {"Ya" if user_data["Paparan Asap Rokok"] == 1 else "Tidak"}
+    - Pendidikan Terakhir Ibu: {user_data["Pendidikan Terakhir Ibu"]}
+    - Pekerjaan Orang Tua: {user_data["Pekerjaan Orang Tua"]}
 
-            if prediction_result and "error" not in prediction_result:
-                score = float(prediction_result.get("risk_score", 0))
-                label = prediction_result.get("risk_label", "- ")
-                
-                colA, colB = st.columns([1, 2])
-                with colA:
-                    st.markdown("#### Hasil Prediksi Model")
-                    st.metric("Probabilitas Stunting", f"{score:.2%}")
-                    if label == "Stunting":
-                        st.error(f"Kategori: **{label}**")
-                    else:
-                        st.success(f"Kategori: **{label}**")
-                with colB:
-                    st.markdown("#### Rekomendasi Cepat (Contoh)")
-                    recs = []
-                    if berat_lahir_gram < 2500: recs.append("Perkuat pemantauan BBLR dan pastikan asupan gizi.")
-                    if status_imunisasi_anak != "Lengkap": recs.append("Segera lengkapi imunisasi dasar di Posyandu/Puskesmas.")
-                    if hb_g_dl < 11.0: recs.append("Konsultasi gizi terkait anemia dan konsumsi tablet tambah darah (TTD).")
-                    if not recs: recs.append("Pertahankan pola asuh dan gizi yang baik, lakukan monitoring berkala.")
-                    st.write("\n".join([f"• {r}" for r in recs]))
-            else:
-                st.error("Gagal melakukan prediksi. Cek log untuk detail.")
-        else:
-            st.error("Model lokal tidak dapat dimuat. Prediksi dibatalkan.")
+    Hasil Prediksi Model:
+    - Probabilitas Stunting: {prediction_proba:.2f}%
+    - Kategori Risiko: {prediction_result}
 
-# --- Main Execution ---
-st.set_page_config(layout="wide", page_title="Prediksi Keluarga")
-styles.load_css()
-render_page()
+    Tugas Anda:
+    Berikan 3 rekomendasi praktis yang paling relevan untuk membantu keluarga ini mencegah atau mengatasi risiko stunting berdasarkan data yang paling menonjol. Gunakan bahasa yang mudah dipahami oleh orang awam.
+    """
 
+    data = {
+        "model": "qwen/qwen-2.5-7b-instruct",
+        "messages": [{"role": "user", "content": prompt}],
+    }
+
+    try:
+        response = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers=headers,
+            data=json.dumps(data),
+            timeout=30,
+        )
+        response.raise_for_status()
+        result = response.json()
+        recommendation = result["choices"][0]["message"]["content"]
+        return recommendation
+    except requests.exceptions.RequestException as e:
+        return f"Terjadi kesalahan saat menghubungi server AI: {e}"
+    except (KeyError, IndexError):
+        return "Gagal memproses respons dari AI. Format respons tidak sesuai."
+
+
+# Judul halaman
+st.set_page_config(page_title="Prediksi Risiko Keluarga", layout="wide")
+st.title("Prediksi Risiko Keluarga – Scoring & Rekomendasi")
+st.markdown(
+    "Isi form berikut untuk memprediksi risiko stunting berdasarkan model Machine Learning."
+)
+
+# Membuat form input
+with st.form(key="prediction_form"):
+    st.subheader("1. Data Anak")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        usia_anak = st.number_input(
+            "Usia Anak (bulan)", min_value=0, max_value=60, value=12
+        )
+        berat_lahir = st.number_input(
+            "Berat Lahir (gram)", min_value=1000, max_value=5000, value=3000
+        )
+    with col2:
+        jenis_kelamin = st.radio("Jenis Kelamin", ["Laki-laki", "Perempuan"])
+        asi_eksklusif = st.radio("ASI Eksklusif?", ["Ya", "Tidak"])
+    with col3:
+        status_imunisasi = st.radio("Status Imunisasi", ["Lengkap", "Tidak Lengkap"])
+        akses_air_bersih = st.radio("Akses Air Bersih", ["Layak", "Tidak Layak"])
+        paparan_asap_rokok = st.radio("Paparan Asap Rokok", ["Ya", "Tidak"])
+
+    st.subheader("2. Data Ibu & Kehamilan")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        tinggi_ibu = st.number_input(
+            "Tinggi Badan Ibu (cm)", min_value=130, max_value=200, value=155
+        )
+        lila_saat_hamil = st.number_input(
+            "LiLA saat Hamil (cm)", min_value=15.0, max_value=40.0, value=25.0, step=0.1
+        )
+        bmi_pra_hamil = st.number_input(
+            "BMI Pra-Hamil", min_value=10.0, max_value=40.0, value=22.0, step=0.1
+        )
+    with col2:
+        usia_ibu_hamil = st.number_input(
+            "Usia Ibu saat Hamil (tahun)", min_value=15, max_value=50, value=28
+        )
+        kenaikan_bb_hamil = st.number_input(
+            "Kenaikan BB saat Hamil (kg)", min_value=0, max_value=30, value=12
+        )
+        jarak_kehamilan = st.number_input(
+            "Jarak Kehamilan Sebelumnya (bulan)", min_value=0, max_value=120, value=24
+        )
+    with col3:
+        kadar_hb = st.number_input(
+            "Kadar Hb (g/dL)", min_value=5.0, max_value=20.0, value=11.0, step=0.1
+        )
+        jumlah_kunjungan_anc = st.number_input(
+            "Jumlah Kunjungan ANC", min_value=0, max_value=20, value=4
+        )
+        kepatuhan_ttd = st.selectbox("Kepatuhan Konsumsi TTD", ["Baik", "Kurang"])
+
+    st.subheader("3. Kondisi Keluarga & Lainnya")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        # Input ini tetap ada untuk dikirim ke LLM, tapi tidak untuk model ML
+        pendidikan_ibu = st.selectbox(
+            "Pendidikan Terakhir Ibu", ["SD", "SMP", "SMA", "Diploma/S1", "S2/S3"]
+        )
+        pekerjaan_ortu = st.selectbox(
+            "Pekerjaan Orang Tua",
+            ["PNS", "Wiraswasta", "Petani", "Buruh", "Tidak Bekerja"],
+        )
+        status_pernikahan = st.selectbox(
+            "Status Pernikahan", ["Menikah", "Cerai", "Lainnya"]
+        )
+    with col2:
+        jumlah_anak = st.number_input(
+            "Total Jumlah Anak", min_value=1, max_value=15, value=1
+        )
+        riwayat_hipertensi = st.radio("Riwayat Hipertensi Ibu", ["Ya", "Tidak"])
+    with col3:
+        riwayat_diabetes = st.radio("Riwayat Diabetes Ibu", ["Ya", "Tidak"])
+        program_bantuan = st.selectbox(
+            "Program Bantuan Diterima", ["Tidak Ada", "BPNT", "PKH", "Lainnya"]
+        )
+
+    submit_button = st.form_submit_button(label="🔬 Prediksi Risiko")
+
+
+# Jika tombol ditekan
+if submit_button:
+    # Kumpulkan semua data input, termasuk yang kategorikal untuk LLM
+    input_data_for_llm = {
+        "Usia Anak (bulan)": usia_anak,
+        "Berat Lahir (gram)": berat_lahir,
+        "Jenis Kelamin": 1 if jenis_kelamin == "Laki-laki" else 0,
+        "ASI Eksklusif": 1 if asi_eksklusif == "Ya" else 0,
+        "Status Imunisasi": 1 if status_imunisasi == "Lengkap" else 0,
+        "Akses Air Bersih": 1 if akses_air_bersih == "Layak" else 0,
+        "Paparan Asap Rokok": 1 if paparan_asap_rokok == "Ya" else 0,
+        "Pendidikan Terakhir Ibu": pendidikan_ibu,  # Untuk LLM
+        "Pekerjaan Orang Tua": pekerjaan_ortu,  # Untuk LLM
+    }
+
+    # **PERBAIKAN:** Buat DataFrame hanya dengan 19 fitur yang diharapkan model
+    feature_names = [
+        "usia_anak",
+        "berat_lahir",
+        "jenis_kelamin",
+        "asi_eksklusif",
+        "status_imunisasi",
+        "akses_air_bersih",
+        "paparan_asap_rokok",
+        "tinggi_ibu",
+        "lila_saat_hamil",
+        "bmi_pra_hamil",
+        "usia_ibu_hamil",
+        "kenaikan_bb_hamil",
+        "jarak_kehamilan",
+        "kadar_hb",
+        "jumlah_kunjungan_anc",
+        "kepatuhan_ttd",
+        "jumlah_anak",
+        "riwayat_hipertensi_ibu",
+        "riwayat_diabetes_ibu",
+    ]
+
+    # Data untuk input ke model machine learning
+    input_for_model = {
+        "usia_anak": [usia_anak],
+        "berat_lahir": [berat_lahir],
+        "jenis_kelamin": [1 if jenis_kelamin == "Laki-laki" else 0],
+        "asi_eksklusif": [1 if asi_eksklusif == "Ya" else 0],
+        "status_imunisasi": [1 if status_imunisasi == "Lengkap" else 0],
+        "akses_air_bersih": [1 if akses_air_bersih == "Layak" else 0],
+        "paparan_asap_rokok": [1 if paparan_asap_rokok == "Ya" else 0],
+        "tinggi_ibu": [tinggi_ibu],
+        "lila_saat_hamil": [lila_saat_hamil],
+        "bmi_pra_hamil": [bmi_pra_hamil],
+        "usia_ibu_hamil": [usia_ibu_hamil],
+        "kenaikan_bb_hamil": [kenaikan_bb_hamil],
+        "jarak_kehamilan": [jarak_kehamilan],
+        "kadar_hb": [kadar_hb],
+        "jumlah_kunjungan_anc": [jumlah_kunjungan_anc],
+        "kepatuhan_ttd": [1 if kepatuhan_ttd == "Baik" else 0],
+        "jumlah_anak": [jumlah_anak],
+        "riwayat_hipertensi_ibu": [1 if riwayat_hipertensi == "Ya" else 0],
+        "riwayat_diabetes_ibu": [1 if riwayat_diabetes == "Ya" else 0],
+    }
+
+    input_df = pd.DataFrame(input_for_model)
+    # Pastikan urutan kolom sesuai (meskipun dalam kasus ini seharusnya sudah benar)
+    input_df = input_df[feature_names]
+
+    # Lakukan prediksi
+    prediction_proba = model.predict_proba(input_df)[0][1] * 100
+    prediction = "Stunting" if prediction_proba > 50 else "Tidak Stunting"
+
+    # Tampilkan hasil
+    st.subheader("Hasil Prediksi Model")
+    st.info(
+        "🔬 Simulasi prediksi tanpa standard scaling. Akurasi mungkin berbeda dari notebook."
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric(label="Probabilitas Stunting", value=f"{prediction_proba:.2f}%")
+        st.write(f"Kategori: **{prediction}**")
+
+    with col2:
+        st.subheader("Rekomendasi Cepat dari AI 💡")
+        with st.spinner("Membuat rekomendasi personal untuk Anda..."):
+            # Dapatkan rekomendasi dari LLM
+            recommendation = get_llm_recommendation(
+                input_data_for_llm, prediction_proba, prediction
+            )
+            st.markdown(recommendation)
