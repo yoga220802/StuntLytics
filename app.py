@@ -50,7 +50,7 @@ def main():
         st.markdown(
             """
             <div class="metric-card">
-                <div class="metric-card-title">Total Bayi Stunting / Total Bayi Lahir</div>
+                <div class="metric-card-title">Total Stunting / Lahir</div>
         """,
             unsafe_allow_html=True,
         )
@@ -60,7 +60,7 @@ def main():
             label_visibility="hidden",
         )
         st.markdown(
-            '<div class="small-muted">setelah filter</div></div>',
+            '<div class="small-muted">per wilayah setelah filter</div></div>',
             unsafe_allow_html=True,
         )
 
@@ -80,8 +80,9 @@ def main():
             ]
         )
         fig_stunting.update_layout(
+            title="Proporsi Bayi Stunting",
             showlegend=False,
-            margin=dict(t=0, b=0, l=0, r=0),
+            margin=dict(t=30, b=10, l=10, r=10),
             height=150,  # Smaller height for the chart
             paper_bgcolor="rgba(0,0,0,0)",  # Transparent background
             plot_bgcolor="rgba(0,0,0,0)",  # Transparent plot area
@@ -104,18 +105,9 @@ def main():
             unsafe_allow_html=True,
         )
 
-        # Determine grouping level based on filter
-        if filters["selected_kecamatan"] == "(Semua)":
-            # Group by kecamatan if only kabupaten is selected
-            nakes_grouped = (
-                df_filtered.groupby("kecamatan")["jumlah_nakes"]
-                .sum()
-                .sort_values(ascending=False)
-            )
-            title = "Jumlah Nakes per Kecamatan"
-            yaxis_title = "Kecamatan"
-        else:
-            # Group by kabupaten if kecamatan is also selected
+        # Determine grouping level based on filters
+        if filters["selected_kabupaten"] == "(Semua)":
+            # Group by kabupaten and display the top kabupaten with the highest jumlah nakes
             nakes_grouped = (
                 df_filtered.groupby("kabupaten")["jumlah_nakes"]
                 .sum()
@@ -123,6 +115,21 @@ def main():
             )
             title = "Jumlah Nakes per Kabupaten"
             yaxis_title = "Kabupaten"
+        elif filters["selected_kecamatan"] == "(Semua)":
+            # Group by kecamatan within the selected kabupaten
+            nakes_grouped = (
+                df_filtered.groupby("kecamatan")["jumlah_nakes"]
+                .sum()
+                .sort_values(ascending=False)
+            )
+            title = f"Jumlah Nakes per Kecamatan di {filters['selected_kabupaten']}"
+            yaxis_title = "Kecamatan"
+        else:
+            # Display data for the selected kecamatan only
+            nakes_grouped = df_filtered[df_filtered["kecamatan"] == filters["selected_kecamatan"]]
+            nakes_grouped = nakes_grouped.groupby("kecamatan")["jumlah_nakes"].sum()
+            title = f"Jumlah Nakes di Kecamatan {filters['selected_kecamatan']}"
+            yaxis_title = "Kecamatan"
 
         # Bar Chart for Jumlah Nakes
         fig_nakes = go.Figure(
@@ -210,16 +217,17 @@ def main():
                     labels=labels,
                     values=air_layak_data,
                     hole=0.4,
-                    textinfo="percent+label",
+                    textinfo="percent",
                 )
             ]
         )
         fig_air.update_layout(
             title="Proporsi Akses Air Layak",
+            showlegend=False,
             margin=dict(t=30, b=10, l=10, r=10),
-            height=200,
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
+            height=150,  # Smaller height for the chart
+            paper_bgcolor="rgba(0,0,0,0)",  # Transparent background
+            plot_bgcolor="rgba(0,0,0,0)",  # Transparent plot area
         )
         st.plotly_chart(fig_air, use_container_width=True, config={"displayModeBar": False})
 
