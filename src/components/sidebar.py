@@ -3,59 +3,69 @@ import pandas as pd
 from src.utils import get_kabupaten_list, get_kecamatan_list
 from src.config import DEFAULT_PREDICT_API, DEFAULT_INSIGHT_API
 
+def _unique_sorted(values):
+    return sorted(list({v for v in values if v and v.strip()}))
+
 def render_sidebar(df: pd.DataFrame) -> dict:
-    st.sidebar.title("🎛️ Kontrol & Filter")
-    st.sidebar.markdown("**Sasaran:** Pemerintah Daerah (Pemda)")
-    st.sidebar.caption("Filter memengaruhi seluruh tampilan halaman.")
-
-    # Filter Rentang Tanggal
-    min_d, max_d = df["tanggal"].min().date(), df["tanggal"].max().date()
-    date_range = st.sidebar.date_input(
-        "Rentang Tanggal", 
-        value=(min_d, max_d), 
-        min_value=min_d, 
-        max_value=max_d
+    """Sidebar untuk dashboard data utama (mengembalikan dict filter)."""
+    st.sidebar.header("Filter Data")
+    # Tanggal
+    if "tanggal" in df.columns:
+        min_date = pd.to_datetime(df["tanggal"]).min().date()
+        max_date = pd.to_datetime(df["tanggal"]).max().date()
+    else:
+        today = pd.Timestamp.today().date()
+        min_date = max_date = today
+    start_date, end_date = st.sidebar.date_input(
+        "Rentang Tanggal",
+        (min_date, max_date),
+        min_value=min_date,
+        max_value=max_date,
     )
+    # Risiko
+    risk_options = sorted(df["risk_label"].dropna().unique()) if "risk_label" in df.columns else []
+    selected_risk = st.sidebar.multiselect("Risk Level", risk_options, default=risk_options)
 
-    # Filter Wilayah (Kabupaten & Kecamatan)
-    kabupaten_pilihan = st.sidebar.selectbox(
-        "Kabupaten/Kota", 
-        options=get_kabupaten_list(df)
-    )
-    kecamatan_pilihan = st.sidebar.selectbox(
-        "Kecamatan", 
-        options=get_kecamatan_list(df, kabupaten_pilihan)
-    )
+    # Kabupaten
+    kab_options = ["(Semua)"] + sorted(df["kabupaten"].dropna().unique()) if "kabupaten" in df.columns else ["(Semua)"]
+    selected_kabupaten = st.sidebar.selectbox("Kabupaten", kab_options, index=0)
 
-    # Filter Kategori Risiko
-    risk_filter = st.sidebar.multiselect(
-        "Kategori Risiko", 
-        options=["Rendah", "Sedang", "Tinggi"], 
-        default=["Rendah", "Sedang", "Tinggi"]
-    )
-
-    # Expander untuk Konfigurasi API (menggunakan session_state)
-    with st.sidebar.expander("Konfigurasi API"):
-        st.session_state.setdefault("predict_api", DEFAULT_PREDICT_API)
-        st.session_state.setdefault("insight_api", DEFAULT_INSIGHT_API)
-        
-        st.session_state["predict_api"] = st.text_input(
-            "Prediction API", st.session_state["predict_api"]
-        )    
-        st.session_state["insight_api"] = st.text_input(
-            "Insight API", st.session_state["insight_api"]
-        )
-
-    # Pastikan date_range memiliki 2 elemen sebelum di-return
-    start_date, end_date = date_range if len(date_range) == 2 else (min_d, max_d)
+    # Kecamatan (tergantung kabupaten)
+    if selected_kabupaten != "(Semua)" and "kecamatan" in df.columns:
+        kec_pool = df.loc[df["kabupaten"] == selected_kabupaten, "kecamatan"].dropna().unique()
+    else:
+        kec_pool = df["kecamatan"].dropna().unique() if "kecamatan" in df.columns else []
+    kec_options = ["(Semua)"] + sorted(kec_pool)
+    selected_kecamatan = st.sidebar.selectbox("Kecamatan", kec_options, index=0)
 
     return {
         "start_date": start_date,
         "end_date": end_date,
-        "selected_kabupaten": kabupaten_pilihan,
-        "selected_kecamatan": kecamatan_pilihan,
-        "selected_risk": risk_filter,
+        "selected_risk": selected_risk,
+        "selected_kabupaten": selected_kabupaten,
+        "selected_kecamatan": selected_kecamatan,
     }
+
+def render_geo_sidebar(geojson):
+    """Sidebar khusus halaman peta (geojson)."""
+    st.sidebar.header("Filter Wilayah (Peta)")
+    features = geojson.get("features", [])
+    kab_list = _unique_sorted(f["properties"].get("KABKOT", "") for f in features)
+    kab_options = ["Semua"] + kab_list
+    kabupaten = st.sidebar.selectbox("Kabupaten / Kota", kab_options, index=0)
+
+    kecamatan = "Semua"
+    if kabupaten != "Semua":
+        kec_list = _unique_sorted(
+            f["properties"].get("KECAMATAN", "")
+            for f in features
+            if f["properties"].get("KABKOT", "").upper() == kabupaten.upper()
+        )
+        kec_options = ["Semua"] + kec_list
+        kecamatan = st.sidebar.selectbox("Kecamatan", kec_options, index=0)
+    else:
+        st.sidebar.markdown("<small>Pilih kabupaten/kota untuk mengaktifkan filter kecamatan.</small>", unsafe_allow_html=True)
+    return kabupaten, kecamatan
 
 def apply_filters(df: pd.DataFrame, filters: dict) -> pd.DataFrame:
     """

@@ -3,23 +3,36 @@ import pandas as pd
 import joblib
 import requests
 import json
+import os
+
+# Helper aman untuk ambil API key
+def _get_openrouter_api_key():
+    env_key = os.getenv("OPENROUTER_API_KEY", "")
+    if env_key:
+        return env_key
+    try:
+        # Akses dibungkus try agar tidak memicu StreamlitSecretNotFoundError
+        return st.secrets["OPENROUTER_API_KEY"]
+    except Exception:
+        return ""
 
 # Muat model yang telah dilatih
 try:
-    model = joblib.load("models/stunting_model.joblib")
+    model = joblib.load("models\modell_stunting_terbaik (1).joblib")
+    MODEL_FEATURES = list(getattr(model, "feature_names_in_", []))
 except FileNotFoundError:
-    st.error(
-        "File model 'stunting_model.joblib' tidak ditemukan. Pastikan file tersebut ada di dalam folder 'models/'."
-    )
+    st.error("File model tidak ditemukan di folder 'models/'.")
+    st.stop()
+except Exception as e:
+    st.error(f"Gagal memuat model: {e}")
     st.stop()
 
 
 # Fungsi untuk memanggil API OpenRouter dan mendapatkan rekomendasi
 def get_llm_recommendation(user_data, prediction_proba, prediction_result):
-    # Ganti dengan API Key Anda
-    api_key = (
-        "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"
-    )
+    api_key = _get_openrouter_api_key()
+    if not api_key:
+        return "API Key LLM tidak tersedia. Set OPENROUTER_API_KEY sebagai environment variable atau tambahkan ke .streamlit/secrets.toml."
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
     # Membuat prompt yang informatif untuk LLM
@@ -86,8 +99,44 @@ st.markdown(
     "Isi form berikut untuk memprediksi risiko stunting berdasarkan model Machine Learning."
 )
 
+# Data UMP (dipindah ke atas agar bisa dipakai saat prediksi)
+UMP = {
+    "Kabupaten Bandung": 3_700_000,
+    "Kabupaten Bandung Barat": 3_600_000,
+    "Kabupaten Bekasi": 5_200_000,
+    "Kabupaten Bogor": 4_500_000,
+    "Kabupaten Ciamis": 2_100_000,
+    "Kabupaten Cianjur": 2_700_000,
+    "Kabupaten Cirebon": 2_500_000,
+    "Kabupaten Garut": 2_200_000,
+    "Kabupaten Indramayu": 2_700_000,
+    "Kabupaten Karawang": 5_300_000,
+    "Kabupaten Kuningan": 2_300_000,
+    "Kabupaten Majalengka": 2_400_000,
+    "Kabupaten Pangandaran": 2_200_000,
+    "Kabupaten Purwakarta": 4_800_000,
+    "Kabupaten Subang": 3_000_000,
+    "Kabupaten Sukabumi": 3_000_000,
+    "Kabupaten Sumedang": 3_200_000,
+    "Kabupaten Tasikmalaya": 2_400_000,
+    "Kota Bandung": 4_000_000,
+    "Kota Banjar": 2_300_000,
+    "Kota Bekasi": 5_200_000,
+    "Kota Bogor": 4_800_000,
+    "Kota Cimahi": 3_800_000,
+    "Kota Cirebon": 3_200_000,
+    "Kota Depok": 4_800_000,
+    "Kota Sukabumi": 3_200_000,
+    "Kota Tasikmalaya": 2_600_000,
+}
+
 # Membuat form input
 with st.form(key="prediction_form"):
+    # Tambah pemilihan wilayah untuk derivasi UMP (Wilayah sendiri tidak menjadi fitur)
+    wilayah_pred = st.selectbox("Wilayah (untuk hitung UMP)", options=list(UMP.keys()))
+    rata_rata_ump_pred = UMP.get(wilayah_pred, 0)
+    st.caption(f"Rata-rata UMP Wilayah: Rp {rata_rata_ump_pred:,}")
+
     st.subheader("1. Data Anak")
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -139,7 +188,6 @@ with st.form(key="prediction_form"):
     st.subheader("3. Kondisi Keluarga & Lainnya")
     col1, col2, col3 = st.columns(3)
     with col1:
-        # Input ini tetap ada untuk dikirim ke LLM, tapi tidak untuk model ML
         pendidikan_ibu = st.selectbox(
             "Pendidikan Terakhir Ibu", ["SD", "SMP", "SMA", "Diploma/S1", "S2/S3"]
         )
@@ -150,11 +198,17 @@ with st.form(key="prediction_form"):
         status_pernikahan = st.selectbox(
             "Status Pernikahan", ["Menikah", "Cerai", "Lainnya"]
         )
+        # INPUT BARU (dipindah dari form upload agar bisa dipakai model)
+        tipe_wilayah = st.selectbox("Tipe Wilayah", ["Urban", "Rural"])
     with col2:
         jumlah_anak = st.number_input(
             "Total Jumlah Anak", min_value=1, max_value=15, value=1
         )
         riwayat_hipertensi = st.radio("Riwayat Hipertensi Ibu", ["Ya", "Tidak"])
+        # INPUT BARU
+        upah_keluarga = st.number_input(
+            "Upah Keluarga (Rp/bulan)", min_value=0, step=100000, value=0
+        )
     with col3:
         riwayat_diabetes = st.radio("Riwayat Diabetes Ibu", ["Ya", "Tidak"])
         program_bantuan = st.selectbox(
@@ -176,6 +230,98 @@ if "prediction_proba" not in st.session_state:
 if "show_upload_form" not in st.session_state:
     st.session_state["show_upload_form"] = False
 
+def build_model_input(
+    riwayat_hipertensi,
+    riwayat_diabetes,
+    kepatuhan_ttd,
+    paparan_asap_rokok,
+    tipe_wilayah,
+    pekerjaan_ortu,
+    pendidikan_ibu,
+    status_pernikahan,
+    program_bantuan,
+    lila_saat_hamil,
+    bmi_pra_hamil,
+    kadar_hb,
+    kenaikan_bb_hamil,
+    usia_ibu_hamil,
+    jarak_kehamilan,
+    jumlah_kunjungan_anc,
+    jumlah_anak,
+    upah_keluarga,
+    akses_air_bersih,
+    # fitur anak & ekonomi tambahan
+    jenis_kelamin,
+    berat_lahir,
+    asi_eksklusif,
+    usia_anak,
+    tinggi_ibu,
+    status_imunisasi,
+    rata_rata_ump
+):
+    # Encoder sederhana
+    map_simple = {
+        'Tipe Wilayah': {'Rural': 0, 'Urban': 1},
+        'Jenis Pekerjaan Orang Tua': {
+            'Tidak Bekerja': 0, 'Buruh': 1, 'Petani': 2, 'Wiraswasta': 3, 'PNS': 4
+        },
+        'Pendidikan Ibu': {
+            'SD': 0, 'SMP': 1, 'SMA': 2, 'Diploma/S1': 3, 'S2/S3': 4
+        },
+        'Status Pernikahan': {
+            'Lainnya': 0, 'Cerai': 1, 'Menikah': 2
+        },
+        'Kepesertaan Program Bantuan': {
+            'Tidak Ada': 0, 'Lainnya': 1, 'BPNT': 2, 'PKH': 3
+        }
+    }
+    def bin01(val, pos): return 1 if val == pos else 0
+
+    # Base row disesuaikan dengan 28 fitur training (tanpa target & tanpa kolom yang di-drop)
+    base_row = {
+        'Tipe Wilayah': map_simple['Tipe Wilayah'][tipe_wilayah],
+        'Jenis Kelamin Anak': bin01(jenis_kelamin, 'Laki-laki'),
+        'Jenis Pekerjaan Orang Tua': map_simple['Jenis Pekerjaan Orang Tua'][pekerjaan_ortu],
+        'Pendidikan Ibu': map_simple['Pendidikan Ibu'][pendidikan_ibu],
+        'Status Pernikahan': map_simple['Status Pernikahan'][status_pernikahan],
+        'Jumlah Anak': jumlah_anak,
+        'Upah Keluarga (Rp/bulan)': upah_keluarga,
+        'Rata-rata UMP Wilayah (Rp/bulan)': rata_rata_ump,
+        'Akses Air Bersih': bin01(akses_air_bersih, 'Layak'),
+        'Status Imunisasi Anak': bin01(status_imunisasi, 'Lengkap'),
+        'Berat Lahir (gram)': berat_lahir,
+        'ASI Eksklusif': bin01(asi_eksklusif, 'Ya'),
+        'Usia Anak (bulan)': usia_anak,
+        'Tinggi Badan Ibu (cm)': tinggi_ibu,
+        'LiLA saat Hamil (cm)': lila_saat_hamil,
+        'BMI Pra-Hamil': bmi_pra_hamil,
+        'Hb (g/dL)': kadar_hb,
+        'Kenaikan BB Hamil (kg)': kenaikan_bb_hamil,
+        'Usia Ibu saat Hamil (tahun)': usia_ibu_hamil,
+        'Jarak Kehamilan Sebelumnya (bulan)': jarak_kehamilan,
+        'Hipertensi Ibu': bin01(riwayat_hipertensi, 'Ya'),
+        'Diabetes Ibu': bin01(riwayat_diabetes, 'Ya'),
+        'Kunjungan ANC (x)': jumlah_kunjungan_anc,
+        'Kepatuhan TTD': bin01(kepatuhan_ttd, 'Baik'),
+        'Paparan Asap Rokok': bin01(paparan_asap_rokok, 'Ya'),
+        'Kepesertaan Program Bantuan': map_simple['Kepesertaan Program Bantuan'][program_bantuan],
+        # Placeholder probabilitas (di-training ada sebagai fitur rekayasa)
+        'Prob_raw': 0.0,
+        'Probabilitas Stunting (simulasi)': 0.0
+    }
+
+    if not MODEL_FEATURES:
+        return pd.DataFrame([base_row])
+
+    missing = [f for f in MODEL_FEATURES if f not in base_row]
+    for f in missing:
+        base_row[f] = 0  # fallback
+    aligned_row = {k: base_row[k] for k in MODEL_FEATURES}
+
+    if missing:
+        st.warning(f"Fitur (default=0) ditambahkan otomatis: {missing}")
+    return pd.DataFrame([aligned_row], columns=MODEL_FEATURES)
+
 # Jika tombol prediksi ditekan
 if submit_button:
     # Kumpulkan semua data input, termasuk yang kategorikal untuk LLM
@@ -191,62 +337,51 @@ if submit_button:
         "Pekerjaan Orang Tua": pekerjaan_ortu,  # Untuk LLM
     }
 
-    # **PERBAIKAN:** Buat DataFrame hanya dengan 19 fitur yang diharapkan model
-    feature_names = [
-        "usia_anak",
-        "berat_lahir",
-        "jenis_kelamin",
-        "asi_eksklusif",
-        "status_imunisasi",
-        "akses_air_bersih",
-        "paparan_asap_rokok",
-        "tinggi_ibu",
-        "lila_saat_hamil",
-        "bmi_pra_hamil",
-        "usia_ibu_hamil",
-        "kenaikan_bb_hamil",
-        "jarak_kehamilan",
-        "kadar_hb",
-        "jumlah_kunjungan_anc",
-        "kepatuhan_ttd",
-        "jumlah_anak",
-        "riwayat_hipertensi_ibu",
-        "riwayat_diabetes_ibu",
-    ]
+    input_df = build_model_input(
+        riwayat_hipertensi=riwayat_hipertensi,
+        riwayat_diabetes=riwayat_diabetes,
+        kepatuhan_ttd=kepatuhan_ttd,
+        paparan_asap_rokok=paparan_asap_rokok,
+        tipe_wilayah=tipe_wilayah,
+        pekerjaan_ortu=pekerjaan_ortu,
+        pendidikan_ibu=pendidikan_ibu,
+        status_pernikahan=status_pernikahan,
+        program_bantuan=program_bantuan,
+        lila_saat_hamil=lila_saat_hamil,
+        bmi_pra_hamil=bmi_pra_hamil,
+        kadar_hb=kadar_hb,
+        kenaikan_bb_hamil=kenaikan_bb_hamil,
+        usia_ibu_hamil=usia_ibu_hamil,
+        jarak_kehamilan=jarak_kehamilan,
+        jumlah_kunjungan_anc=jumlah_kunjungan_anc,
+        jumlah_anak=jumlah_anak,
+        upah_keluarga=upah_keluarga,
+        akses_air_bersih=akses_air_bersih,
+        jenis_kelamin=jenis_kelamin,
+        berat_lahir=berat_lahir,
+        asi_eksklusif=asi_eksklusif,
+        usia_anak=usia_anak,
+        tinggi_ibu=tinggi_ibu,
+        status_imunisasi=status_imunisasi,
+        rata_rata_ump=rata_rata_ump_pred
+    )
 
-    # Data untuk input ke model machine learning
-    input_for_model = {
-        "usia_anak": [usia_anak],
-        "berat_lahir": [berat_lahir],
-        "jenis_kelamin": [1 if jenis_kelamin == "Laki-laki" else 0],
-        "asi_eksklusif": [1 if asi_eksklusif == "Ya" else 0],
-        "status_imunisasi": [1 if status_imunisasi == "Lengkap" else 0],
-        "akses_air_bersih": [1 if akses_air_bersih == "Layak" else 0],
-        "paparan_asap_rokok": [1 if paparan_asap_rokok == "Ya" else 0],
-        "tinggi_ibu": [tinggi_ibu],
-        "lila_saat_hamil": [lila_saat_hamil],
-        "bmi_pra_hamil": [bmi_pra_hamil],
-        "usia_ibu_hamil": [usia_ibu_hamil],
-        "kenaikan_bb_hamil": [kenaikan_bb_hamil],
-        "jarak_kehamilan": [jarak_kehamilan],
-        "kadar_hb": [kadar_hb],
-        "jumlah_kunjungan_anc": [jumlah_kunjungan_anc],
-        "kepatuhan_ttd": [1 if kepatuhan_ttd == "Baik" else 0],
-        "jumlah_anak": [jumlah_anak],
-        "riwayat_hipertensi_ibu": [1 if riwayat_hipertensi == "Ya" else 0],
-        "riwayat_diabetes_ibu": [1 if riwayat_diabetes == "Ya" else 0],
-    }
-
-    input_df = pd.DataFrame(input_for_model)
-    # Pastikan urutan kolom sesuai (meskipun dalam kasus ini seharusnya sudah benar)
-    input_df = input_df[feature_names]
-
-    # Lakukan prediksi
-    prediction_proba = model.predict_proba(input_df)[0][1] * 100
-    prediction = "Stunting" if prediction_proba > 50 else "Tidak Stunting"
-
-    # Simpan prediction_proba ke session state
-    st.session_state["prediction_proba"] = prediction_proba
+    # Validasi jumlah fitur sebelum prediksi
+    expected = getattr(model, "n_features_in_", None)
+    if expected and input_df.shape[1] != expected:
+        st.error(
+            f"Jumlah fitur tidak sesuai. Model mengharapkan {expected}, tetapi input memiliki {input_df.shape[1]}. "
+            f"Nama fitur model: {list(getattr(model, 'feature_names_in_', []))}"
+        )
+    else:
+        try:
+            prediction_proba = model.predict_proba(input_df)[0][1] * 100
+            prediction = "Stunting" if prediction_proba > 50 else "Tidak Stunting"
+            st.session_state["prediction_proba"] = prediction_proba
+        except Exception as e:
+            st.error(f"Gagal melakukan prediksi: {e}")
+            prediction_proba = 0
+            prediction = "Tidak Diketahui"
 
     # Tampilkan hasil
     st.subheader("Hasil Prediksi Model")
@@ -267,37 +402,6 @@ if submit_button:
                 input_data_for_llm, prediction_proba, prediction
             )
             st.markdown(recommendation)
-
-# Data UMP berdasarkan wilayah
-UMP = {
-    "Kabupaten Bandung": 3_700_000,
-    "Kabupaten Bandung Barat": 3_600_000,
-    "Kabupaten Bekasi": 5_200_000,
-    "Kabupaten Bogor": 4_500_000,
-    "Kabupaten Ciamis": 2_100_000,
-    "Kabupaten Cianjur": 2_700_000,
-    "Kabupaten Cirebon": 2_500_000,
-    "Kabupaten Garut": 2_200_000,
-    "Kabupaten Indramayu": 2_700_000,
-    "Kabupaten Karawang": 5_300_000,
-    "Kabupaten Kuningan": 2_300_000,
-    "Kabupaten Majalengka": 2_400_000,
-    "Kabupaten Pangandaran": 2_200_000,
-    "Kabupaten Purwakarta": 4_800_000,
-    "Kabupaten Subang": 3_000_000,
-    "Kabupaten Sukabumi": 3_000_000,
-    "Kabupaten Sumedang": 3_200_000,
-    "Kabupaten Tasikmalaya": 2_400_000,
-    "Kota Bandung": 4_000_000,
-    "Kota Banjar": 2_300_000,
-    "Kota Bekasi": 5_200_000,
-    "Kota Bogor": 4_800_000,
-    "Kota Cimahi": 3_800_000,
-    "Kota Cirebon": 3_200_000,
-    "Kota Depok": 4_800_000,
-    "Kota Sukabumi": 3_200_000,
-    "Kota Tasikmalaya": 2_600_000,
-}
 
 # Jika tombol upload data baru ditekan
 if upload_button:
