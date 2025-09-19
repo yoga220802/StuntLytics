@@ -142,7 +142,7 @@ if pipeline:
                 ],
             )
             status_pernikahan = st.selectbox(
-                "Status Pernikahan", ["Menikah", "Belum Menikah"]
+                "Status Pernikahan", ["Menikah", "Cerai"]
             )
         with col2:
             jumlah_anak = st.number_input(
