@@ -318,3 +318,143 @@ def get_numeric_sample_for_corr(
 
     # 2. Biarkan Pandas memilih kolom numerik. Ini cara paling tangguh.
     return df_sample.select_dtypes(include=["number"]).copy()
+
+
+# --- Fungsi untuk Halaman Explorer Data ---
+def _apply_advanced_filters_to_query(body: dict, advanced_filters: dict) -> dict:
+    """Helper untuk menerapkan filter lanjutan ke body query yang sudah ada."""
+    has_advanced_filters = any(
+        (isinstance(advanced_filters.get(key), list) and advanced_filters.get(key))
+        or (
+            not isinstance(advanced_filters.get(key), list)
+            and advanced_filters.get(key)
+            and advanced_filters.get(key) != "Semua"
+        )
+        for key in advanced_filters
+    )
+
+    if not has_advanced_filters:
+        return body
+
+    if "match_all" in body["query"]:
+        body["query"] = {"bool": {"must": []}}
+
+    must_clauses = body["query"]["bool"]["must"]
+
+    if advanced_filters.get("pendidikan_ibu"):
+        must_clauses.append(
+            {"terms": {"Pendidikan Ibu": advanced_filters["pendidikan_ibu"]}}
+        )
+
+    if advanced_filters.get("asi_eksklusif") != "Semua":
+        val = (
+            ["Ya", "ya", "True", "true", "1"]
+            if advanced_filters["asi_eksklusif"] == "Ya"
+            else ["Tidak", "tidak", "False", "false", "0"]
+        )
+        must_clauses.append(
+            {
+                "bool": {
+                    "should": [
+                        {"terms": {"ASI Eksklusif": val}},
+                        {"terms": {"ASI Eksklusif (ya/tidak)": val}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            }
+        )
+
+    if advanced_filters.get("akses_air") != "Semua":
+        val = (
+            ["Layak", "Ada", "Ya", "Bersih", "Aman"]
+            if advanced_filters["akses_air"] == "Ada"
+            else ["Tidak Layak", "Tidak", "Tidak Ada"]
+        )
+        must_clauses.append(
+            {
+                "bool": {
+                    "should": [
+                        {"terms": {"Akses Air": val}},
+                        {"terms": {"Akses Air Bersih": val}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            }
+        )
+
+    return body
+
+
+def get_explorer_data(
+    filters: dict, advanced_filters: dict, size: int = 1000
+) -> pd.DataFrame:
+    body = build_query(filters)
+    body = _apply_advanced_filters_to_query(body, advanced_filters)
+
+    source_fields = [
+        "Tanggal",
+        "nama_kabupaten_kota",
+        "Kecamatan",
+        "Status Stunting (Biner)",
+        "ZScore TB/U",
+        "Usia Anak (bulan)",
+        "Berat Lahir (gram)",
+        "ASI Eksklusif",
+        "Status Imunisasi Anak",
+        "Pendidikan Ibu",
+        "Akses Air Bersih",
+    ]
+
+    body["_source"] = source_fields
+    body["size"] = size
+    body["sort"] = [{"ZScore TB/U": "asc"}]
+
+    data = _es_post(STUNTING_INDEX, "/_search", body)
+
+    hits = data.get("hits", {}).get("hits", [])
+    df = pd.DataFrame([h.get("_source", {}) for h in hits])
+
+    if not df.empty:
+        df = df.rename(
+            columns={
+                "nama_kabupaten_kota": "Kabupaten/Kota",
+                "Status Stunting (Biner)": "Status Stunting",
+                "ZScore TB/U": "Z-Score",
+                "Usia Anak (bulan)": "Usia Anak (bln)",
+                "Berat Lahir (gram)": "Berat Lahir (gr)",
+                "Status Imunisasi Anak": "Imunisasi",
+                "Akses Air Bersih": "Akses Air",
+            }
+        )
+    return df
+
+
+def get_top_counts_for_explorer_chart(
+    filters: dict, advanced_filters: dict
+) -> pd.DataFrame:
+    """Fungsi baru untuk chart berjenjang."""
+    if filters.get("wilayah"):
+        agg_field = "Kecamatan"
+        level_label = "Kecamatan"
+    else:
+        agg_field = "nama_kabupaten_kota"
+        level_label = "Kabupaten/Kota"
+
+    body = build_query(filters)
+    body = _apply_advanced_filters_to_query(body, advanced_filters)
+
+    body["size"] = 0
+    body["aggs"] = {"counts_by_region": {"terms": {"field": agg_field, "size": 5}}}
+
+    data = _es_post(STUNTING_INDEX, "/_search", body)
+    buckets = (
+        data.get("aggregations", {}).get("counts_by_region", {}).get("buckets", [])
+    )
+
+    if not buckets:
+        return pd.DataFrame(columns=[level_label, "Jumlah Data"])
+
+    df = pd.DataFrame(buckets)
+    df = df.rename(columns={"key": level_label, "doc_count": "Jumlah Data"})
+
+    return df
