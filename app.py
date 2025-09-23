@@ -1,9 +1,11 @@
+# StuntLytics/app.py
 import streamlit as st
 import pandas as pd
-import plotly.graph_objects as go  # Import plotly for the donut chart
+import plotly.graph_objects as go
 
-from src import config, styles, data_loader
-from src.components import sidebar
+# BARU: Ganti import data_loader dengan elastic_client
+from src import config, styles, elastic_client as es
+from src.components.sidebar import render  # Ganti dengan sidebar dinamis
 
 
 def main():
@@ -15,11 +17,31 @@ def main():
     )
     styles.load_css()
 
-    df_all = data_loader.load_data()
-    filters = sidebar.render_sidebar(df_all)
-    df_filtered = sidebar.apply_filters(df_all, filters)
+    # --- BARU: Pengecekan Koneksi & Sidebar Dinamis ---
+    ok, msg = es.ping()
+    if ok:
+        st.sidebar.success(msg)
+    else:
+        st.sidebar.error(msg)
+        st.error(
+            "Tidak dapat terhubung ke database Elasticsearch. Aplikasi tidak dapat berjalan."
+        )
+        st.stop()
 
-    # Header
+    # GANTI: sidebar.render_sidebar(df_all) menjadi render()
+    # Tidak ada lagi df_all atau df_filtered, semua kalkulasi dilakukan di ES
+    filters = render()
+    st.session_state["filters"] = filters
+
+    # --- BARU: Pengambilan Data Terpusat dari Elasticsearch ---
+    try:
+        with st.spinner("Mengambil dan memproses data dari Elasticsearch..."):
+            summary_data = es.get_main_page_summary(filters)
+    except Exception as e:
+        st.error(f"Terjadi kesalahan saat mengambil data: {e}")
+        st.stop()
+
+    # Header (TETAP SAMA)
     st.markdown(
         f'<div class="app-header">{config.APP_TITLE}</div>', unsafe_allow_html=True
     )
@@ -28,30 +50,22 @@ def main():
         unsafe_allow_html=True,
     )
 
-    # Metrik / KPI Utama - dengan struktur HTML baru
+    # --- GANTI: Sumber data KPI menggunakan hasil dari ES ---
+    kpi_data = summary_data["kpi"]
+    chart_data = summary_data["charts"]
+
+    total_bayi_lahir = kpi_data["total_bayi_lahir"]
+    total_bayi_stunting = kpi_data["total_bayi_stunting"]
+    total_nakes = kpi_data["jumlah_nakes"]
+    imun_cov = kpi_data["cakupan_imunisasi_pct"]
+    air_cov = kpi_data["akses_air_layak_pct"]
+
     col1, col2, col3, col4 = st.columns(4)
 
-    total_observasi = len(df_filtered)
-    total_bayi_lahir = df_filtered["total_bayi_lahir"].sum()
-    total_bayi_stunting = df_filtered["total_bayi_stunting"].sum()
-    pct_high = (
-        (df_filtered["risk_label"].eq("Tinggi").mean() * 100)
-        if total_observasi > 0
-        else 0
-    )
-    imun_cov = (
-        df_filtered["imunisasi_lengkap"].mean() * 100 if total_observasi > 0 else 0
-    )
-    air_cov = df_filtered["akses_air_layak"].mean() * 100 if total_observasi > 0 else 0
-    total_nakes = df_filtered["jumlah_nakes"].sum()  # Calculate total healthcare workers
-
+    # --- Kolom 1: Stunting (Tampilan TETAP SAMA, sumber data GANTI) ---
     with col1:
-        # Metric for Total Bayi Stunting / Total Bayi Lahir
         st.markdown(
-            """
-            <div class="metric-card">
-                <div class="metric-card-title">Total Stunting / Lahir</div>
-        """,
+            """<div class="metric-card"><div class="metric-card-title">Total Stunting / Lahir</div>""",
             unsafe_allow_html=True,
         )
         st.metric(
@@ -63,8 +77,6 @@ def main():
             '<div class="small-muted">per wilayah setelah filter</div></div>',
             unsafe_allow_html=True,
         )
-
-        # Donut Chart for Stunting Proportion
         stunting_data = {
             "Bayi Stunting": total_bayi_stunting,
             "Bayi Tidak Stunting": total_bayi_lahir - total_bayi_stunting,
@@ -74,8 +86,8 @@ def main():
                 go.Pie(
                     labels=list(stunting_data.keys()),
                     values=list(stunting_data.values()),
-                    hole=0.5,  # Creates the donut hole
-                    textinfo="percent",  # Show only percentages
+                    hole=0.5,
+                    textinfo="percent",
                 )
             ]
         )
@@ -83,55 +95,38 @@ def main():
             title="Proporsi Bayi Stunting",
             showlegend=False,
             margin=dict(t=30, b=10, l=10, r=10),
-            height=150,  # Smaller height for the chart
-            paper_bgcolor="rgba(0,0,0,0)",  # Transparent background
-            plot_bgcolor="rgba(0,0,0,0)",  # Transparent plot area
+            height=150,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
         )
-        st.plotly_chart(fig_stunting, use_container_width=True, config={"displayModeBar": False})
+        st.plotly_chart(
+            fig_stunting, use_container_width=True, config={"displayModeBar": False}
+        )
 
+    # --- Kolom 2: Nakes (Tampilan TETAP SAMA, sumber data GANTI) ---
     with col2:
         st.markdown(
-            """
-            <div class="metric-card">
-                <div class="metric-card-title">Jumlah Nakes</div>
-        """,
+            """<div class="metric-card"><div class="metric-card-title">Jumlah Nakes</div>""",
             unsafe_allow_html=True,
         )
-        st.metric(
-            "Jumlah Nakes", f"{total_nakes:,}", label_visibility="hidden"
-        )
+        st.metric("Jumlah Nakes", f"{total_nakes:,.0f}", label_visibility="hidden")
         st.markdown(
             '<div class="small-muted">per wilayah setelah filter</div></div>',
             unsafe_allow_html=True,
         )
+        nakes_grouped = chart_data["nakes_by_region"]
 
-        # Determine grouping level based on filters
-        if filters["selected_kabupaten"] == "(Semua)":
-            # Group by kabupaten and display the top kabupaten with the highest jumlah nakes
-            nakes_grouped = (
-                df_filtered.groupby("kabupaten")["jumlah_nakes"]
-                .sum()
-                .sort_values(ascending=False)
-            )
+        # Logika judul dinamis TETAP SAMA
+        if not filters["wilayah"]:
             title = "Jumlah Nakes per Kabupaten"
             yaxis_title = "Kabupaten"
-        elif filters["selected_kecamatan"] == "(Semua)":
-            # Group by kecamatan within the selected kabupaten
-            nakes_grouped = (
-                df_filtered.groupby("kecamatan")["jumlah_nakes"]
-                .sum()
-                .sort_values(ascending=False)
-            )
-            title = f"Jumlah Nakes per Kecamatan di {filters['selected_kabupaten']}"
+        elif not filters["kecamatan"]:
+            title = f"Jumlah Nakes per Kecamatan di {filters['wilayah'][0]}"
             yaxis_title = "Kecamatan"
         else:
-            # Display data for the selected kecamatan only
-            nakes_grouped = df_filtered[df_filtered["kecamatan"] == filters["selected_kecamatan"]]
-            nakes_grouped = nakes_grouped.groupby("kecamatan")["jumlah_nakes"].sum()
-            title = f"Jumlah Nakes di Kecamatan {filters['selected_kecamatan']}"
+            title = f"Jumlah Nakes di Kecamatan {filters['kecamatan'][0]}"
             yaxis_title = "Kecamatan"
 
-        # Bar Chart for Jumlah Nakes
         fig_nakes = go.Figure(
             data=[
                 go.Bar(
@@ -146,19 +141,20 @@ def main():
             title=title,
             xaxis_title="Jumlah Nakes",
             yaxis_title=yaxis_title,
+            yaxis={"categoryorder": "total ascending"},
             margin=dict(t=30, b=10, l=10, r=10),
             height=200,
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
         )
-        st.plotly_chart(fig_nakes, use_container_width=True, config={"displayModeBar": False})
+        st.plotly_chart(
+            fig_nakes, use_container_width=True, config={"displayModeBar": False}
+        )
 
+    # --- Kolom 3: Imunisasi (Tampilan TETAP SAMA, sumber data GANTI) ---
     with col3:
         st.markdown(
-            """
-            <div class="metric-card">
-                <div class="metric-card-title">Cakupan Imunisasi</div>
-        """,
+            """<div class="metric-card"><div class="metric-card-title">Cakupan Imunisasi</div>""",
             unsafe_allow_html=True,
         )
         st.metric("Cakupan Imunisasi", f"{imun_cov:.1f}%", label_visibility="hidden")
@@ -166,14 +162,7 @@ def main():
             '<div class="small-muted">indikator kunci SSGI</div></div>',
             unsafe_allow_html=True,
         )
-
-        # Line Chart for Cakupan Imunisasi over Time
-        imunisasi_per_bulan = (
-            df_filtered.groupby(df_filtered["tanggal"].dt.to_period("M"))["imunisasi_lengkap"]
-            .mean()
-            .reset_index()
-        )
-        imunisasi_per_bulan["tanggal"] = imunisasi_per_bulan["tanggal"].dt.to_timestamp()
+        imunisasi_per_bulan = chart_data["imunisasi_trend"]
         fig_imun = go.Figure(
             data=[
                 go.Scatter(
@@ -193,29 +182,26 @@ def main():
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
         )
-        st.plotly_chart(fig_imun, use_container_width=True, config={"displayModeBar": False})
+        st.plotly_chart(
+            fig_imun, use_container_width=True, config={"displayModeBar": False}
+        )
 
+    # --- Kolom 4: Akses Air (Tampilan TETAP SAMA, sumber data GANTI) ---
     with col4:
         st.markdown(
-            """
-            <div class="metric-card">
-                <div class="metric-card-title">Akses Air Layak</div>
-        """,
+            """<div class="metric-card"><div class="metric-card-title">Akses Air Layak</div>""",
             unsafe_allow_html=True,
         )
         st.metric("Akses Air Layak", f"{air_cov:.1f}%", label_visibility="hidden")
         st.markdown(
             '<div class="small-muted">sektor WASH</div></div>', unsafe_allow_html=True
         )
-
-        # Pie Chart for Akses Air Layak
-        air_layak_data = df_filtered["akses_air_layak"].value_counts(normalize=True) * 100
-        labels = ["Layak", "Tidak Layak"]
+        air_layak_data = chart_data["air_distribusi"]
         fig_air = go.Figure(
             data=[
                 go.Pie(
-                    labels=labels,
-                    values=air_layak_data,
+                    labels=air_layak_data.index,
+                    values=air_layak_data.values,
                     hole=0.4,
                     textinfo="percent",
                 )
@@ -225,12 +211,15 @@ def main():
             title="Proporsi Akses Air Layak",
             showlegend=False,
             margin=dict(t=30, b=10, l=10, r=10),
-            height=150,  # Smaller height for the chart
-            paper_bgcolor="rgba(0,0,0,0)",  # Transparent background
-            plot_bgcolor="rgba(0,0,0,0)",  # Transparent plot area
+            height=150,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
         )
-        st.plotly_chart(fig_air, use_container_width=True, config={"displayModeBar": False})
+        st.plotly_chart(
+            fig_air, use_container_width=True, config={"displayModeBar": False}
+        )
 
+    # Footer Info (TETAP SAMA)
     st.info(
         "Selamat datang di Dashboard StuntLytics. Gunakan navigasi di sebelah kiri untuk menjelajahi fitur-fitur analisis.",
         icon="👋",
