@@ -1,18 +1,125 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-
-from src import config, styles
-from src import elastic_client as es
+import os
+import openai
+from src import styles, elastic_client as es
 from src.components import sidebar
 
 
+# --- FUNGSI BARU UNTUK INSIGHT AI ---
+def _get_openai_api_key():
+    # Mencari OPENAI_API_KEY
+    env_key = os.getenv("OPENAI_API_KEY", "")
+    if env_key:
+        return env_key
+    try:
+        return st.secrets.get("OPENAI_API_KEY", "")
+    except Exception:
+        return ""
+
+
+def generate_ai_insight(
+    filters: dict, trend_df: pd.DataFrame, corr_series: pd.Series
+) -> str:
+    """
+    Menghasilkan insight dari AI berdasarkan data tren dan korelasi yang terfilter.
+    """
+    api_key = _get_openai_api_key()
+    if not api_key:
+        return "**Insight AI tidak tersedia.** `OPENAI_API_KEY` belum diatur."
+
+    try:
+        client = openai.OpenAI(api_key=api_key)
+    except Exception as e:
+        return f"Gagal menginisialisasi client OpenAI: {e}"
+
+    # --- Merangkum data untuk prompt ---
+    # 1. Ringkasan Tren
+    trend_summary = "Data tren tidak cukup untuk dianalisis."
+    if not trend_df.empty and len(trend_df) > 1:
+        # ======================================================================
+        # FIX: Pastikan index adalah DatetimeIndex sebelum menggunakan strftime
+        # ======================================================================
+        if not isinstance(trend_df.index, pd.DatetimeIndex):
+            trend_df.index = pd.to_datetime(trend_df.index)
+        # ======================================================================
+
+        start_date = trend_df.index[0].strftime("%Y-%m")
+        end_date = trend_df.index[-1].strftime("%Y-%m")
+        start_val = trend_df["Stunting %"].iloc[0]
+        end_val = trend_df["Stunting %"].iloc[-1]
+        max_val = trend_df["Stunting %"].max()
+        min_val = trend_df["Stunting %"].min()
+        trend_summary = (
+            f"Dari {start_date} hingga {end_date}, tren prevalensi stunting "
+            f"bergerak dari {start_val:.2f}% ke {end_val:.2f}%. "
+            f"Puncak tertinggi adalah {max_val:.2f}% dan terendah {min_val:.2f}%."
+        )
+
+    # 2. Ringkasan Korelasi
+    corr_summary = "Data korelasi tidak cukup untuk dianalisis."
+    if not corr_series.empty:
+        top_positive = corr_series[corr_series > 0].nlargest(3)
+        top_negative = corr_series[corr_series < 0].nsmallest(3)
+
+        pos_list = [f"{idx} ({val:.2f})" for idx, val in top_positive.items()]
+        neg_list = [f"{idx} ({val:.2f})" for idx, val in top_negative.items()]
+
+        pos_str = (
+            ", ".join(pos_list)
+            if pos_list
+            else "Tidak ada korelasi positif yang signifikan."
+        )
+        neg_str = (
+            ", ".join(neg_list)
+            if neg_list
+            else "Tidak ada korelasi negatif yang signifikan."
+        )
+
+        corr_summary = (
+            f"Faktor dengan korelasi positif terkuat terhadap Z-Score (kondisi lebih baik): {pos_str}. "
+            f"Faktor dengan korelasi negatif terkuat (kondisi lebih buruk): {neg_str}."
+        )
+
+    # --- Membangun Prompt ---
+    prompt = f"""
+    Anda adalah seorang analis data senior di dinas kesehatan, bertugas memberikan ringkasan eksekutif.
+    
+    **Konteks Filter Data:**
+    {filters}
+
+    **Ringkasan Data Analisis:**
+    1.  **Analisis Tren:** {trend_summary}
+    2.  **Analisis Korelasi:** {corr_summary}
+
+    **Tugas Anda:**
+    Berdasarkan **HANYA PADA DATA RINGKASAN DI ATAS**, berikan 2-3 poin insight utama dalam format bullet points (gunakan tanda `-`).
+    Fokus pada temuan yang paling signifikan atau actionable. Jawaban harus singkat, padat, dan langsung ke intinya.
+    """
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4.1-nano",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Anda adalah seorang analis data senior yang ahli memberikan ringkasan eksekutif.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            timeout=60,
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        return f"Gagal menghubungi server OpenAI: {e}"
+
+
+# --- RENDER HALAMAN ---
 def render_page():
-    # --- Setup ---
     st.subheader("Tren & Korelasi – Analitik Pendukung Kebijakan")
     filters = sidebar.render()
 
-    # --- Pengambilan Data ---
     try:
         df_trend = es.get_monthly_trend(filters)
         df_corr_sample = es.get_numeric_sample_for_corr(filters)
@@ -20,22 +127,22 @@ def render_page():
         st.error(f"Gagal mengambil data dari Elasticsearch: {e}")
         return
 
-    # --- Halaman Utama ---
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("**Tren Proporsi Stunting per Bulan**")
         if not df_trend.empty:
+            # Menggunakan df_trend langsung karena sudah memiliki index yang benar
             st.line_chart(df_trend)
         else:
             st.warning("Data tren tidak tersedia untuk filter saat ini.")
 
     with c2:
         st.markdown("**Faktor Paling Berpengaruh (Korelasi thd Z-Score)**")
-
-        # FINAL: Gunakan 'ZScore TB/U' sebagai target korelasi.
         target_col = "ZScore TB/U"
 
-        # Pengecekan data yang lebih kuat
+        # Inisialisasi corr_risk untuk memastikan variabel ada
+        corr_risk = pd.Series(dtype=float)
+
         if (
             not df_corr_sample.empty
             and target_col in df_corr_sample.columns
@@ -43,16 +150,11 @@ def render_page():
         ):
             try:
                 corr = df_corr_sample.corr(numeric_only=True)
-
-                # Pastikan target kolom ada di hasil korelasi (tidak di-drop karena varians nol)
                 if target_col in corr:
                     corr_risk = corr[target_col].drop(target_col, errors="ignore")
-
-                    # Pastikan ada data untuk di-plot
                     if not corr_risk.empty:
                         top_features = corr_risk.abs().nlargest(6)
                         top_corr_values = corr_risk.loc[top_features.index]
-
                         df_radar = pd.DataFrame(
                             {
                                 "Faktor": top_corr_values.index,
@@ -96,29 +198,16 @@ def render_page():
                 "Data tidak cukup untuk menghitung korelasi dengan filter saat ini."
             )
 
-    # --- Insight Otomatis ---
-    st.markdown("### Insight Otomatis (Rule-based)")
-    try:
-        msgs = []
-        if not df_corr_sample.empty:
-            df_insight = df_corr_sample.rename(
-                columns={
-                    "ZScore TB/U": "risk_score",
-                    "BMI Pra-Hamil": "bmi_pra_hamil",
-                    "Hb (g/dL)": "hb_g_dl",
-                }
-            )
-            for key, rule in config.INSIGHT_RULES.items():
-                if rule["when"](df_insight):
-                    msgs.append(rule["msg"])
-        if msgs:
-            st.success("\n".join([f"• {m}" for m in msgs]))
-        else:
-            st.info(
-                "Tidak ada insight khusus dari rule sederhana untuk data yang ditampilkan."
-            )
-    except Exception as e:
-        st.error(f"Gagal menjalankan beberapa rule insight: {e}")
+    # --- BAGIAN BARU: INSIGHT OTOMATIS AI ---
+    st.markdown("---")
+    st.subheader("🤖 Insight Otomatis AI")
+
+    if df_trend.empty and corr_risk.empty:
+        st.info("Tidak ada data yang cukup untuk dianalisis oleh AI.")
+    else:
+        with st.spinner("AI sedang menganalisis tren dan korelasi..."):
+            ai_insight = generate_ai_insight(filters, df_trend, corr_risk)
+            st.markdown(ai_insight)
 
 
 # --- Main Execution ---
