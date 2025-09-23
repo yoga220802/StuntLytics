@@ -508,3 +508,78 @@ def get_explorer_data_for_export(
     df = pd.DataFrame([h.get("_source", {}) for h in hits])
 
     return df
+
+# Letakkan ini di bagian paling akhir file src/elastic_client.py
+
+
+def get_risk_map_data(filters: dict) -> pd.DataFrame:
+    """
+    Mengambil data agregat per wilayah (kabupaten & kecamatan) untuk keperluan Risk Map.
+    Menghitung total anak dan jumlah anak stunting di tiap wilayah.
+    """
+    body = build_query(filters)
+
+    body["size"] = 0
+    body["aggs"] = {
+        "by_kab": {
+            "terms": {"field": "nama_kabupaten_kota", "size": 100},
+            "aggs": {
+                "by_kec": {
+                    "terms": {"field": "Kecamatan", "size": 5000},
+                    "aggs": {
+                        "stunting_count": {
+                            "filter": {
+                                "bool": {
+                                    "should": [
+                                        {
+                                            "terms": {
+                                                "Status Stunting (Biner)": [
+                                                    "Stunting",
+                                                    "Ya",
+                                                    "YA",
+                                                    "ya",
+                                                    "1",
+                                                    "true",
+                                                    "TRUE",
+                                                    "True",
+                                                ]
+                                            }
+                                        },
+                                        {
+                                            "terms": {
+                                                "Status Stunting (Stunting / Berisiko / Normal)": [
+                                                    "Stunting",
+                                                    "stunting",
+                                                ]
+                                            }
+                                        },
+                                        {"range": {"ZScore TB/U": {"lte": -2.0}}},
+                                    ],
+                                    "minimum_should_match": 1,
+                                }
+                            }
+                        }
+                    },
+                }
+            },
+        }
+    }
+
+    data = _es_post(STUNTING_INDEX, "/_search", body)
+
+    rows = []
+    kab_buckets = data.get("aggregations", {}).get("by_kab", {}).get("buckets", [])
+    for kab_b in kab_buckets:
+        kab_name = kab_b["key"]
+        kec_buckets = kab_b.get("by_kec", {}).get("buckets", [])
+        for kec_b in kec_buckets:
+            rows.append(
+                {
+                    "kabupaten": kab_name,
+                    "kecamatan": kec_b["key"],
+                    "total_anak": kec_b["doc_count"],
+                    "jumlah_stunting": kec_b["stunting_count"]["doc_count"],
+                }
+            )
+
+    return pd.DataFrame(rows)
