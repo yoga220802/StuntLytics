@@ -458,3 +458,53 @@ def get_top_counts_for_explorer_chart(
     df = df.rename(columns={"key": level_label, "doc_count": "Jumlah Data"})
 
     return df
+
+# Letakkan ini di bagian paling akhir file src/elastic_client.py
+def get_explorer_data_for_export(
+    filters: dict, advanced_filters: dict, size: int = 5000
+) -> pd.DataFrame:
+    """
+    Mengambil sampel data besar untuk ekspor, dengan MENGGABUNGKAN
+    filter utama (sidebar) dan filter lanjutan (halaman explorer).
+    """
+    body = build_query(filters)
+    # Terapkan filter lanjutan dari helper function yang sudah ada
+    body = _apply_advanced_filters_to_query(body, advanced_filters)
+
+    # Ambil hampir semua field yang relevan
+    source_fields = [
+        "Tanggal",
+        "nama_kabupaten_kota",
+        "Kecamatan",
+        "Status Stunting (Biner)",
+        "ZScore TB/U",
+        "Probabilitas Stunting (simulasi)",
+        "Usia Anak (bulan)",
+        "Berat Lahir (gram)",
+        "ASI Eksklusif",
+        "Status Imunisasi Anak",
+        "Pendidikan Ibu",
+        "Akses Air Bersih",
+        "Kepesertaan Program Bantuan",
+        "Upah Keluarga (Rp/bulan)",
+        "Jumlah Anak",
+        "Tinggi Badan Ibu (cm)",
+        "BMI Pra-Hamil",
+        "Hb (g/dL)",
+        "LiLA saat Hamil (cm)",
+        "Kunjungan ANC (x)",
+        "Paparan Asap Rokok",
+        "Jenis Pekerjaan Orang Tua",
+    ]
+
+    body["_source"] = source_fields
+    body["size"] = size
+    # Urutkan berdasarkan Z-Score terendah (paling berisiko)
+    body["sort"] = [{"ZScore TB/U": "asc"}]
+
+    data = _es_post(STUNTING_INDEX, "/_search", body)
+
+    hits = data.get("hits", {}).get("hits", [])
+    df = pd.DataFrame([h.get("_source", {}) for h in hits])
+
+    return df
