@@ -2,12 +2,105 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from datetime import datetime
+import os
+import openai
+import json
 
 from src import styles
 from src import elastic_client as es
 from src.components import sidebar
 
 
+# --- FUNGSI BARU UNTUK INSIGHT AI ---
+def _get_openai_api_key():
+    env_key = os.getenv("OPENAI_API_KEY", "")
+    if env_key:
+        return env_key
+    try:
+        return st.secrets.get("OPENAI_API_KEY", "")
+    except Exception:
+        return ""
+
+
+def generate_ai_summary(
+    main_filters: dict, advanced_filters: dict, df: pd.DataFrame
+) -> str:
+    """
+    Menghasilkan ringkasan cerdas dari AI berdasarkan data yang ditampilkan di explorer.
+    """
+    api_key = _get_openai_api_key()
+    if not api_key:
+        return "**Ringkasan AI tidak tersedia.** `OPENAI_API_KEY` belum diatur."
+
+    try:
+        client = openai.OpenAI(api_key=api_key)
+    except Exception as e:
+        return f"Gagal menginisialisasi client OpenAI: {e}"
+
+    # --- Merangkum DataFrame menjadi statistik untuk prompt ---
+    if df.empty:
+        return "Tidak ada data untuk dianalisis."
+
+    summary = {
+        "Jumlah Data Terfilter": len(df),
+        "Statistik Z-Score": df["Z-Score"].describe().to_dict(),
+        "Distribusi Pendidikan Ibu (%)": (
+            df["Pendidikan Ibu"].value_counts(normalize=True) * 100
+        )
+        .round(2)
+        .to_dict(),
+        "Distribusi ASI Eksklusif (%)": (
+            df["ASI Eksklusif"].value_counts(normalize=True) * 100
+        )
+        .round(2)
+        .to_dict(),
+        "Distribusi Akses Air Bersih (%)": (
+            df["Akses Air Bersih"].value_counts(normalize=True) * 100
+        )
+        .round(2)
+        .to_dict(),
+        "Rata-rata Usia Anak (bulan)": round(df["Usia Anak (bulan)"].mean(), 1),
+        "Rata-rata BMI Pra-Hamil": round(df["BMI Pra-Hamil"].mean(), 2)
+        if "BMI Pra-Hamil" in df.columns
+        else "N/A",
+    }
+    summary_json = json.dumps(summary, indent=2, ensure_ascii=False)
+
+    # --- Membangun Prompt ---
+    prompt = f"""
+    Anda adalah seorang analis data kesehatan masyarakat yang sangat teliti. Tugas Anda adalah memberikan analisis singkat dan tajam terhadap sub-kelompok data stunting yang sudah difilter.
+
+    **Konteks Filter Aktif:**
+    - Filter Utama: {main_filters}
+    - Filter Lanjutan: {advanced_filters}
+
+    **Ringkasan Statistik dari Data Terfilter:**
+    ```json
+    {summary_json}
+    ```
+
+    **Tugas Anda:**
+    Berdasarkan **HANYA PADA RINGKASAN STATISTIK DI ATAS**, berikan 2-3 poin analisis utama dalam format bullet points (`-`). Fokus pada karakteristik yang paling menonjol dari kelompok ini. Apa yang bisa disimpulkan tentang profil risiko mereka? Jawaban harus singkat, padat, dan berbasis data.
+    """
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4.1-nano",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Anda adalah analis data kesehatan masyarakat yang ahli menganalisis sub-kelompok data.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            timeout=90,
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        return f"Gagal menghubungi server OpenAI: {e}"
+
+
+# --- RENDER HALAMAN ---
 def render_page():
     # --- Sidebar & Filter Utama ---
     st.subheader("Explorer Data – Filter, Visualisasi & Ekspor")
@@ -43,7 +136,7 @@ def render_page():
         df_explorer = es.get_explorer_data(main_filters, advanced_filters, size=1000)
 
         st.caption(
-            f"Menampilkan hingga 1.000 data teratas yang paling berisiko. Gunakan fitur ekspor di bawah untuk mengunduh data lebih lengkap."
+            "Menampilkan hingga 1.000 data teratas yang paling berisiko. Gunakan fitur ekspor di bawah untuk mengunduh data lebih lengkap."
         )
         if not df_explorer.empty:
             df_display = df_explorer.copy()
@@ -172,6 +265,15 @@ def render_page():
                             f"stuntlytics_export_{now_str}.json",
                             "application/json",
                         )
+
+            # --- BAGIAN BARU: INSIGHT AI ---
+            st.markdown("---")
+            st.subheader("🤖 Ringkasan Cerdas AI")
+            with st.spinner("AI sedang menganalisis data yang ditampilkan..."):
+                ai_summary = generate_ai_summary(
+                    main_filters, advanced_filters, df_explorer
+                )
+                st.markdown(ai_summary)
 
         else:
             st.info("Tidak ada data yang cocok dengan kriteria filter yang dipilih.")

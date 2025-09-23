@@ -420,10 +420,10 @@ def get_explorer_data(
                 "nama_kabupaten_kota": "Kabupaten/Kota",
                 "Status Stunting (Biner)": "Status Stunting",
                 "ZScore TB/U": "Z-Score",
-                "Usia Anak (bulan)": "Usia Anak (bln)",
-                "Berat Lahir (gram)": "Berat Lahir (gr)",
+                "Usia Anak (bulan)": "Usia Anak (bulan)",
+                "Berat Lahir (gram)": "Berat Lahir (gram)",
                 "Status Imunisasi Anak": "Imunisasi",
-                "Akses Air Bersih": "Akses Air",
+                "Akses Air Bersih": "Akses Air Bersih",
             }
         )
     return df
